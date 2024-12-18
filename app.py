@@ -6,11 +6,13 @@ from flask import Flask, request, send_file
 from werkzeug.utils import secure_filename
 
 app = Flask(__name__)
+PORT = int(os.environ.get('PORT', 5000))
 
 # Configuration
 UPLOAD_FOLDER = '/tmp/uploads'
 RESULT_FOLDER = '/tmp/results'
 ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg'}
+
 
 # Ensure directories exist
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
@@ -94,4 +96,4 @@ def upload_image():
     return {'error': 'File type not allowed'}, 400
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000)
+    app.run(host='0.0.0.0', port=PORT)
