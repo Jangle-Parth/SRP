@@ -2,37 +2,53 @@ import os
 import cv2
 import numpy as np
 import tensorflow as tf
-from flask import Flask, request, send_file
+from flask import Flask, request, send_file, jsonify
 from werkzeug.utils import secure_filename
+from pathlib import Path
 
 app = Flask(__name__)
-PORT = int(os.environ.get('PORT', 5000))
 
 # Configuration
-UPLOAD_FOLDER = '/tmp/uploads'
-RESULT_FOLDER = '/tmp/results'
+UPLOAD_FOLDER = Path('/tmp/uploads')
+RESULT_FOLDER = Path('/tmp/results')
 ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg'}
+MODEL_PATH = os.getenv('MODEL_PATH', 'path/to/your/tensorflow/model')
 
+# Create directories if they don't exist
+UPLOAD_FOLDER.mkdir(parents=True, exist_ok=True)
+RESULT_FOLDER.mkdir(parents=True, exist_ok=True)
 
-# Ensure directories exist
-os.makedirs(UPLOAD_FOLDER, exist_ok=True)
-os.makedirs(RESULT_FOLDER, exist_ok=True)
+# Load model at startup
+try:
+    detect_fn = tf.saved_model.load(MODEL_PATH)
+except Exception as e:
+    print(f"Error loading model: {e}")
+    detect_fn = None
 
-# Load pre-trained TensorFlow object detection model
-# Note: You'll need to download a specific model from TensorFlow Model Zoo
-MODEL_PATH = 'path/to/your/tensorflow/model'
-detect_fn = tf.saved_model.load(MODEL_PATH)
-
-def allowed_file(filename):
+def allowed_file(filename: str) -> bool:
     """Check if file extension is allowed"""
-    return '.' in filename and \
-           filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
+    return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
-def process_image(image_path):
-    """Perform object detection on the image"""
+def process_image(image_path: Path) -> Path | None:
+    """
+    Perform object detection on the image
+    
+    Args:
+        image_path: Path to input image
+        
+    Returns:
+        Path to processed image or None if processing fails
+    """
     try:
+        if detect_fn is None:
+            raise ValueError("Model not loaded")
+
         # Read image
-        image = cv2.imread(image_path)
+        image = cv2.imread(str(image_path))
+        if image is None:
+            raise ValueError("Failed to read image")
+
+        # Convert image to tensor
         input_tensor = tf.convert_to_tensor(image)
         input_tensor = input_tensor[tf.newaxis, ...]
 
@@ -58,45 +74,58 @@ def process_image(image_path):
                 cv2.rectangle(image, (left, top), (right, bottom), (0, 255, 0), 2)
                 label = f'Class: {classes[i]}, Score: {scores[i]:.2f}'
                 cv2.putText(image, label, (left, top-10), 
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
 
         # Save processed image
-        output_path = os.path.join(RESULT_FOLDER, 'processed_image.jpg')
-        cv2.imwrite(output_path, image)
+        output_path = RESULT_FOLDER / f'processed_{image_path.name}'
+        cv2.imwrite(str(output_path), image)
         return output_path
 
     except Exception as e:
         print(f"Error processing image: {e}")
         return None
 
+@app.route('/health', methods=['GET'])
+def health_check():
+    """Health check endpoint"""
+    return jsonify({
+        'status': 'healthy',
+        'model_loaded': detect_fn is not None
+    })
+
 @app.route('/upload', methods=['POST'])
 def upload_image():
     """Handle image upload and object detection"""
     if 'file' not in request.files:
-        return {'error': 'No file uploaded'}, 400
+        return jsonify({'error': 'No file uploaded'}), 400
 
     file = request.files['file']
-
     if file.filename == '':
-        return {'error': 'No selected file'}, 400
+        return jsonify({'error': 'No selected file'}), 400
 
-    if file and allowed_file(file.filename):
+    if not file or not allowed_file(file.filename):
+        return jsonify({'error': 'File type not allowed'}), 400
+
+    try:
         filename = secure_filename(file.filename)
-        filepath = os.path.join(UPLOAD_FOLDER, filename)
-        file.save(filepath)
+        filepath = UPLOAD_FOLDER / filename
+        file.save(str(filepath))
 
         # Process image
         processed_image_path = process_image(filepath)
+        if processed_image_path is None:
+            return jsonify({'error': 'Image processing failed'}), 500
 
-        if processed_image_path:
-            return send_file(processed_image_path, mimetype='image/jpeg')
-        else:
-            return {'error': 'Image processing failed'}, 500
+        return send_file(str(processed_image_path), mimetype='image/jpeg')
 
-    return {'error': 'File type not allowed'}, 400
+    except Exception as e:
+        return jsonify({'error': f'Server error: {str(e)}'}), 500
 
+    finally:
+        # Cleanup uploaded file
+        if filepath.exists():
+            filepath.unlink()
 
-    # Dynamically set port
 if __name__ == '__main__':
-    port = int(os.environ.get('PORT', 5000))
+    port = int(os.getenv('PORT', 5000))
     app.run(host='0.0.0.0', port=port)
