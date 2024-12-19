@@ -5,7 +5,7 @@ import tensorflow as tf
 from flask import Flask, request, send_file, jsonify
 from werkzeug.utils import secure_filename
 from pathlib import Path
-import tensorflow_hub as hub
+import tensorflow_hub as hub # type: ignore
 
 app = Flask(__name__)
 
